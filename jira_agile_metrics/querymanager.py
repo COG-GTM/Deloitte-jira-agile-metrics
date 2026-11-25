@@ -193,6 +193,16 @@ class QueryManager(object):
         `['status']`.
         """
 
+        # Parse each history's timestamp once and sort once; the initial
+        # values and the change snapshots both walk this list.
+        dated_histories = sorted(
+            (
+                (dateutil.parser.parse(c.created), c)
+                for c in issue.changelog.histories
+            ),
+            key=lambda dc: dc[0],
+        )
+
         for field in fields:
             initial_value = self.resolve_field_value(
                 issue, self.field_name_to_id(field)
@@ -202,15 +212,7 @@ class QueryManager(object):
                     filter(
                         lambda h: h.field == field,
                         itertools.chain.from_iterable(
-                            [
-                                c.items
-                                for c in sorted(
-                                    issue.changelog.histories,
-                                    key=lambda c: dateutil.parser.parse(
-                                        c.created
-                                    ),
-                                )
-                            ]
+                            c.items for _, c in dated_histories
                         ),
                     )
                 ).fromString
@@ -225,11 +227,9 @@ class QueryManager(object):
                 to_string=initial_value,
             )
 
-        for change in sorted(
-            issue.changelog.histories,
-            key=lambda c: dateutil.parser.parse(c.created),
-        ):
-            change_date = dateutil.parser.parse(change.created, ignoretz=True)
+        for created, change in dated_histories:
+            # Same wall-clock value as parse(..., ignoretz=True)
+            change_date = created.replace(tzinfo=None)
 
             for item in change.items:
                 if item.field in fields:

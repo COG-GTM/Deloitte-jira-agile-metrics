@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import dateutil.parser
 
 from .conftest import (
     FauxJIRA as JIRA,
@@ -177,3 +178,59 @@ def test_iter_changes(jira, settings):
             to_string="QA",
         ),
     ]
+
+
+def test_iter_changes_timezones(custom_fields, settings):
+    jira = JIRA(
+        fields=custom_fields,
+        issues=[
+            Issue(
+                "A-2",
+                summary="Issue A-2",
+                issuetype=Value("Story", "story"),
+                status=Value("QA", "qa"),
+                resolution=None,
+                created="2018-01-01T01:01:01.000+0000",
+                customfield_001="Team 1",
+                customfield_002=Value(None, 30),
+                customfield_003=Value(None, []),
+                changes=[
+                    # 08:00 UTC, listed first
+                    Change(
+                        "2018-01-02T08:00:00.000+0000",
+                        [("status", "Next", "QA")],
+                    ),
+                    # 05:00 UTC, so it sorts first despite the later
+                    # wall-clock time
+                    Change(
+                        "2018-01-02T10:00:00.000+0500",
+                        [("status", "Backlog", "Next")],
+                    ),
+                ],
+            )
+        ],
+    )
+    qm = QueryManager(jira, settings)
+    issue = qm.find_issues("(filter=123)")[0]
+    changes = list(qm.iter_changes(issue, ["status"]))
+
+    assert [(c.from_string, c.to_string, c.date) for c in changes[1:]] == [
+        ("Backlog", "Next", datetime.datetime(2018, 1, 2, 10, 0, 0)),
+        ("Next", "QA", datetime.datetime(2018, 1, 2, 8, 0, 0)),
+    ]
+    assert changes[0].to_string == "Backlog"
+    assert all(c.date.tzinfo is None for c in changes[1:])
+
+
+def test_iter_changes_parses_each_timestamp_once(jira, settings, mocker):
+    qm = QueryManager(jira, settings)
+    issue = qm.find_issues("(filter=123)")[0]
+    parse = mocker.patch(
+        "jira_agile_metrics.querymanager.dateutil.parser.parse",
+        wraps=dateutil.parser.parse,
+    )
+
+    list(qm.iter_changes(issue, ["status", "Team"]))
+
+    # one per changelog entry, plus the created date once per field
+    assert parse.call_count == len(issue.changelog.histories) + 2
