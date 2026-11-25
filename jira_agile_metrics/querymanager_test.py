@@ -1,5 +1,6 @@
 import pytest
 import datetime
+import dateutil.parser
 
 from .conftest import (
     FauxJIRA as JIRA,
@@ -219,3 +220,17 @@ def test_iter_changes_timezones(custom_fields, settings):
     ]
     assert changes[0].to_string == "Backlog"
     assert all(c.date.tzinfo is None for c in changes[1:])
+
+
+def test_iter_changes_parses_each_timestamp_once(jira, settings, mocker):
+    qm = QueryManager(jira, settings)
+    issue = qm.find_issues("(filter=123)")[0]
+    parse = mocker.patch(
+        "jira_agile_metrics.querymanager.dateutil.parser.parse",
+        wraps=dateutil.parser.parse,
+    )
+
+    list(qm.iter_changes(issue, ["status", "Team"]))
+
+    # one per changelog entry, plus the created date once per field
+    assert parse.call_count == len(issue.changelog.histories) + 2
